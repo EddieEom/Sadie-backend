@@ -1,28 +1,28 @@
 import bcrypt
-# [긴급 수리] passlib 버그 우회
-if not hasattr(bcrypt, "__about__"):
-    bcrypt.__about__ = type("About", (), {"__version__": bcrypt.__version__})
-
+import resend
+import os
+import random
+import time
+import jwt
+import psycopg2
+from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional, cast
 from fastapi import Depends, FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from openai import OpenAI
-import psycopg2
 from psycopg2.extras import RealDictCursor
-from typing import List, Dict, Any, Optional, cast
-import jwt
-from datetime import datetime, timedelta
-import os
-import random
-import time
-import aiosmtplib
-from email.message import EmailMessage
 from dotenv import load_dotenv
+from typing import Any
 
-# 보안 라이브러리
+# 보안/제한 라이브러리
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+
+# [긴급 수리] passlib/bcrypt 버그 우회
+if not hasattr(bcrypt, "__about__"):
+    bcrypt.__about__ = type("About", (), {"__version__": bcrypt.__version__})
 
 # 1. 환경 설정 로드
 load_dotenv()
@@ -31,12 +31,7 @@ DB_URL = os.getenv("DB_URL")
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
-
-# 이메일 발송 설정 (환경변수)
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 465
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+resend.api_key = os.getenv("RESEND_API_KEY")
 
 # 인증 코드 임시 저장소
 reset_codes: Dict[str, dict] = {}
@@ -59,7 +54,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. 데이터 모델 (Pydantic)
+# 2. 데이터 모델
 class UserAuth(BaseModel):
     user_id: str
     password: str
@@ -117,8 +112,6 @@ def verify_token(token: Optional[str]) -> str:
 @app.post("/signup")
 @limiter.limit("5/minute")
 async def signup(request: Request, user: UserAuth):
-    if not user.email:
-        raise HTTPException(status_code=400, detail="이메일 정보가 필요합니다.")
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -130,9 +123,9 @@ async def signup(request: Request, user: UserAuth):
         )
         conn.commit()
         return {"status": "success", "message": "회원가입 완료!"}
-    except Exception as e:
+    except Exception:
         if conn: conn.rollback()
-        raise HTTPException(status_code=500, detail="회원가입 중 오류 발생 (아이디 중복 확인)")
+        raise HTTPException(status_code=500, detail="아이디 중복 또는 가입 오류")
     finally:
         cur.close()
         conn.close()
@@ -146,10 +139,10 @@ async def login(request: Request, user: LoginRequest):
         cur.execute("SELECT hashed_password FROM users WHERE user_id = %s", (user.user_id,))
         result = cur.fetchone()
         if result:
-            res_dict = cast(Dict[str, Any], result) # 타입을 Dict로 명시
-        if bcrypt.checkpw(user.password.encode('utf-8'), res_dict['hashed_password'].encode('utf-8')):
-            access_token = create_access_token(data={"sub": user.user_id})
-            return {"access_token": access_token, "token_type": "bearer"}
+            res_dict = cast(Dict[str, Any], result)
+            if bcrypt.checkpw(user.password.encode('utf-8'), res_dict['hashed_password'].encode('utf-8')):
+                access_token = create_access_token(data={"sub": user.user_id})
+                return {"access_token": access_token, "token_type": "bearer"}
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 틀렸습니다.")
     finally:
         cur.close()
@@ -164,26 +157,36 @@ async def request_reset_code(req: ResetRequest):
     cur.close()
     conn.close()
 
-    if user:
-        user_dict = cast(Dict[str, Any], user) # 타입을 Dict로 명시
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    
+    user_dict = cast(Dict[str, Any], user)
     if user_dict['email'] != req.email:
         raise HTTPException(status_code=404, detail="정보가 일치하지 않습니다.")
     
     code = f"{random.randint(100000, 999999)}"
     reset_codes[req.user_id] = {"code": code, "expiry": time.time() + 300}
 
-    message = EmailMessage()
-    message["From"] = SMTP_USER
-    message["To"] = req.email
-    message["Subject"] = "[Sadie] 비밀번호 재설정 인증번호"
-    message.set_content(f"인증번호는 [{code}] 입니다. 5분 이내에 입력해주세요.")
-
     try:
-        await aiosmtplib.send(message, hostname=SMTP_SERVER, port=SMTP_PORT, use_tls=True, username=SMTP_USER, password=SMTP_PASSWORD)
+        params: Any = {
+            "from": "Sadie <onboarding@resend.dev>",
+            "to": [req.email],
+            "subject": "[Sadie] 비밀번호 재설정 인증번호",
+            "html": f"""
+                <div style="font-family: sans-serif; padding: 20px;">
+                    <h3>비밀번호 재설정 인증번호</h3>
+                    <p>안녕하세요, Sadie 상담소입니다.</p>
+                    <p>요청하신 인증번호는 다음과 같습니다:</p>
+                    <h2 style="color: #008080;">{code}</h2>
+                    <p>5분 이내에 앱에서 입력해주세요.</p>
+                </div>
+            """,
+        }
+        resend.Emails.send(params)
         return {"message": "인증번호 발송 완료"}
     except Exception as e:
-        print(f"Mail Error: {e}")
-        raise HTTPException(status_code=500, detail="메일 발송 실패")
+        print(f"Resend Error: {e}")
+        raise HTTPException(status_code=500, detail="메일 발송 서비스 오류")
 
 @app.post("/verify-and-reset")
 async def verify_and_reset(req: VerifyReset):

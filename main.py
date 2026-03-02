@@ -179,7 +179,7 @@ async def request_reset_code(req: ResetRequest):
     message.set_content(f"인증번호는 [{code}] 입니다. 5분 이내에 입력해주세요.")
 
     try:
-        await aiosmtplib.send(message, hostname=SMTP_SERVER, port=SMTP_PORT, start_tls=True, username=SMTP_USER, password=SMTP_PASSWORD)
+        await aiosmtplib.send(message, hostname=SMTP_SERVER, port=SMTP_PORT, use_tls=True, username=SMTP_USER, password=SMTP_PASSWORD)
         return {"message": "인증번호 발송 완료"}
     except Exception as e:
         print(f"Mail Error: {e}")

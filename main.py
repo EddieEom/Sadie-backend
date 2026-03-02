@@ -35,13 +35,18 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
 # SMTP_USER = os.getenv("SMTP_USER", "")
 # SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-BREVO_API_KEY = os.getenv("BREVO_API_KEY", "")
-
+BREVO_API_KEY = os.getenv("BREVO_API_KEY")
+if not BREVO_API_KEY:
+    print("❌ 에러: BREVO_API_KEY를 찾을 수 없습니다!")
+else:
+    print(f"✅ API 키 로드 성공 (앞부분): {BREVO_API_KEY[:10]}...")
 
 # Brevo 설정 초기화
 configuration = sib_api_v3_sdk.Configuration()
-configuration.api_key['api-key'] = BREVO_API_KEY
-api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
+configuration.api_key['api-key'] = str(BREVO_API_KEY) 
+
+api_client = sib_api_v3_sdk.ApiClient(configuration)
+api_instance = sib_api_v3_sdk.TransactionalEmailsApi(api_client)
 
 # 인증 코드 임시 저장소
 reset_codes: Dict[str, dict] = {}

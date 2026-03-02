@@ -65,6 +65,10 @@ class UserAuth(BaseModel):
     password: str
     email: str
 
+class LoginRequest(BaseModel):
+    user_id: str
+    password: str
+
 class ResetRequest(BaseModel):
     user_id: str
     email: EmailStr
@@ -135,7 +139,7 @@ async def signup(request: Request, user: UserAuth):
 
 @app.post("/login")
 @limiter.limit("10/minute")
-async def login(request: Request, user: UserAuth):
+async def login(request: Request, user: LoginRequest):
     conn = get_db_connection()
     cur = conn.cursor()
     try:

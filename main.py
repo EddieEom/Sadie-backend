@@ -81,6 +81,10 @@ class ChatRequest(BaseModel):
 class RoomCreate(BaseModel):
     title: str
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
 # 3. 유틸리티 함수
 def get_db_connection():
     return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
@@ -234,7 +238,52 @@ async def delete_account(
     finally:
         cur.close()
         conn.close()
+
+
+# --- 비밀번호 변경 ---
+@app.post("/change-password")
+@limiter.limit("5/minute")
+async def change_password(
+    request: Request, 
+    data: PasswordChange, 
+    authorization: Optional[str] = Header(None)
+):
+    # 1. 토큰 검증 (누구인지 확인)
+    current_user_id = verify_token(authorization)
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 2. 현재 비밀번호가 맞는지 DB에서 확인
+        cur.execute("SELECT hashed_password FROM users WHERE user_id = %s", (current_user_id,))
+        user = cur.fetchone()
         
+        if user:
+            user_dict = cast(Dict[str, Any], user)
+            # 이제 user_dict['hashed_password']를 써도 Pylance가 화내지 않습니다.
+            if not bcrypt.checkpw(data.current_password.encode('utf-8'), user_dict['hashed_password'].encode('utf-8')):
+                raise HTTPException(status_code=401, detail="현재 비밀번호가 일치하지 않습니다.")
+        else:
+            raise HTTPException(status_code=401, detail="사용자를 찾을 수 없습니다.")
+            
+
+        # 3. 새 비밀번호 해싱 및 업데이트
+        salt = bcrypt.gensalt()
+        new_hashed_pw = bcrypt.hashpw(data.new_password.encode('utf-8'), salt).decode('utf-8')
+        
+        cur.execute("UPDATE users SET hashed_password = %s WHERE user_id = %s", (new_hashed_pw, current_user_id))
+        conn.commit()
+        
+        return {"status": "success", "message": "비밀번호가 성공적으로 변경되었습니다."}
+    
+    except Exception as e:
+        if conn: conn.rollback()
+        print(f"Password Change Error: {e}")
+        raise HTTPException(status_code=500, detail="비밀번호 변경 중 오류가 발생했습니다.")
+    finally:
+        cur.close()
+        conn.close()
+          
 # --- 5. 엔드포인트: AI 채팅 (Sadie Persona) ---
 
 @app.post("/chat")

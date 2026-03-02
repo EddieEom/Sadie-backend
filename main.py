@@ -398,7 +398,7 @@ async def delete_room(request: Request, room_id: int, authorization: Optional[st
         conn.close()
 
 
-@app.put("/rooms/{room_id}")
+@app.put("/rooms/{room_id}/title")
 async def update_room_title(
     room_id: int, 
     data: dict, 

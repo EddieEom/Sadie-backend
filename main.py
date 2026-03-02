@@ -13,8 +13,7 @@ from openai import OpenAI
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 from typing import Any
-import smtplib
-from email.mime.text import MIMEText
+import resend
 
 # 보안/제한 라이브러리
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -33,8 +32,9 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+# SMTP_USER = os.getenv("SMTP_USER", "")
+# SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+resend.api_key = os.getenv("RESEND_API_KEY")
 
 # 인증 코드 임시 저장소
 reset_codes: Dict[str, dict] = {}
@@ -171,26 +171,24 @@ async def request_reset_code(req: ResetRequest):
     reset_codes[req.user_id] = {"code": code, "expiry": time.time() + 300}
 
     try:
-        # 📧 Gmail SMTP 설정
-        msg = MIMEText(f"인증번호는 [{code}] 입니다.", "plain", "utf-8")
-        msg["Subject"] = "[Sadie] 비밀번호 재설정"
-        
-        # Pylance 경고 해결: str인 것이 확실하다고 알려줌
-        msg["From"] = str(SMTP_USER)
-        msg["To"] = req.email
-
-        # 587 포트와 STARTTLS 사용
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            # 여기서 발생하는 에러도 str()로 감싸서 해결
-            server.login(str(SMTP_USER), str(SMTP_PASSWORD))
-            server.send_message(msg)
-            
+        # 이 호출은 HTTPS(443 포트)를 사용하므로 Render의 차단을 우회합니다.
+        params: Any = {
+            "from": "Sadie <onboarding@resend.dev>",
+            "to": [req.email], 
+            "subject": "[Sadie] 비밀번호 재설정 인증번호",
+            "html": f"""
+                <div style="font-family: sans-serif; padding: 20px;">
+                    <h3>비밀번호 재설정 인증번호</h3>
+                    <p>인증번호는 <strong>{code}</strong> 입니다.</p>
+                    <p>5분 이내에 입력해주세요.</p>
+                </div>
+            """,
+        }
+        resend.Emails.send(params)
         return {"message": "인증번호 발송 완료"}
-    
     except Exception as e:
-        print(f"Mail Error: {e}")
-        raise HTTPException(status_code=500, detail="메일 발송 실패")
+        print(f"Resend API Error: {e}")
+        raise HTTPException(status_code=500, detail="메일 발송 서비스 오류")
 
 @app.post("/verify-and-reset")
 async def verify_and_reset(req: VerifyReset):

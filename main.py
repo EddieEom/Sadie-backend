@@ -102,23 +102,20 @@ async def signup(request: Request, user: UserAuth):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        # 비밀번호 해싱 전 간단한 검증 (백엔드 2중 방어)
-        if len(user.password) < 8:
-            raise HTTPException(status_code=400, detail={"code": "PW_TOO_SHORT", "msg": "비밀번호가 너무 짧습니다."})
+        # 비밀번호 해싱 (bcrypt 직접 사용)
+        salt = bcrypt.gensalt()
+        hashed_pw = bcrypt.hashpw(user.password.encode('utf-8'), salt).decode('utf-8')
 
-        hashed_pw = pwd_context.hash(user.password)
         cur.execute(
             "INSERT INTO users (user_id, hashed_password) VALUES (%s, %s)",
             (user.user_id, hashed_pw)
         )
         conn.commit()
         return {"status": "success", "message": "회원가입 완료!"}
-    except psycopg2.errors.UniqueViolation:
-        if conn: conn.rollback()
-        raise HTTPException(status_code=400, detail={"code": "DUPLICATE_ID", "msg": "이미 존재하는 아이디입니다."})
     except Exception as e:
         if conn: conn.rollback()
-        raise HTTPException(status_code=500, detail={"code": "SERVER_ERROR", "msg": "서버 내부 오류가 발생했습니다."})
+        print(f"Signup Error: {e}")
+        raise HTTPException(status_code=500, detail="회원가입 중 오류 발생")
     finally:
         cur.close()
         conn.close()
@@ -132,32 +129,41 @@ async def login(request: Request, user: UserAuth):
         cur.execute("SELECT hashed_password FROM users WHERE user_id = %s", (user.user_id,))
         result = cur.fetchone()
 
-        # 1. 사용자가 없는 경우
-        if not result:
+        # 1. 사용자가 아예 없는 경우 (Pylance 에러 방지용 체크)
+        if result is None:
             raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 틀렸습니다.")
 
-        # 2. DB 응답 형태(Dict vs Tuple)에 따른 해시값 추출 로직
-        db_hashed_pw = None
+        # 2. DB에서 해시값 추출 (딕셔너리/튜플 모두 대응)
         if isinstance(result, dict):
-            db_hashed_pw = result.get('hashed_password')
-        elif isinstance(result, (list, tuple)):
-            db_hashed_pw = result[0]
+            stored_hash = result.get('hashed_password')
+        else:
+            stored_hash = result[0]
 
-        # 3. 비밀번호 검증 (Bcrypt 72자 에러 방지를 위해 평문 비밀번호가 첫 번째 인자인지 확인)
-        if db_hashed_pw and pwd_context.verify(user.password, db_hashed_pw):
+        # 3. 해시값이 None인 경우 체크 (Pylance가 지적한 부분)
+        if stored_hash is None:
+            raise HTTPException(status_code=401, detail="계정 정보에 문제가 있습니다.")
+
+        # 4. 검증 실행 (bcrypt 직접 사용)
+        try:
+            # stored_hash가 문자열이면 encode, 이미 바이트면 그대로 사용
+            pw_bytes = user.password.encode('utf-8')
+            hash_bytes = stored_hash.encode('utf-8') if isinstance(stored_hash, str) else stored_hash
+            
+            is_correct = bcrypt.checkpw(pw_bytes, hash_bytes)
+        except Exception as e:
+            print(f"Bcrypt Check Error: {e}")
+            is_correct = False
+
+        if is_correct:
             access_token = create_access_token(data={"sub": user.user_id})
             return {"access_token": access_token, "token_type": "bearer"}
         
-        # 4. 검증 실패 시
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 틀렸습니다.")
-    
+
     except Exception as e:
-        # 서버 로그에 에러를 남겨서 나중에라도 문제를 볼 수 있게 합니다.
         print(f"Login Error: {e}")
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail="서버 내부 오류가 발생했습니다.")
-    
+        if isinstance(e, HTTPException): raise e
+        raise HTTPException(status_code=500, detail="서버 오류가 발생했습니다.")
     finally:
         cur.close()
         conn.close()

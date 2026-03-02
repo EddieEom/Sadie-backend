@@ -34,7 +34,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
 # 이메일 발송 설정 (환경변수)
 SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
+SMTP_PORT = 465
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 

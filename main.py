@@ -127,31 +127,35 @@ async def signup(request: Request, user: UserAuth):
 @limiter.limit("10/minute")
 async def login(request: Request, user: UserAuth):
     conn = get_db_connection()
-    # 딕셔너리 형태로 결과를 받도록 설정 (psycopg2 기준)
-    # 만약 기본 커서라면 result[0]으로 접근해야 합니다.
-    cur = conn.cursor() 
+    cur = conn.cursor()
     try:
         cur.execute("SELECT hashed_password FROM users WHERE user_id = %s", (user.user_id,))
         result = cur.fetchone()
 
+        # 1. 사용자가 없는 경우
         if not result:
             raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 틀렸습니다.")
 
-        # 결과가 딕셔너리일 때와 튜플일 때를 모두 고려
+        # 2. DB 응답 형태(Dict vs Tuple)에 따른 해시값 추출 로직
+        db_hashed_pw = None
         if isinstance(result, dict):
             db_hashed_pw = result.get('hashed_password')
-        else:
-            db_hashed_pw = result[0] # 튜플인 경우 첫 번째 요소
+        elif isinstance(result, (list, tuple)):
+            db_hashed_pw = result[0]
 
-        # 중요: pwd_context.verify(평문비밀번호, DB의해시값)
+        # 3. 비밀번호 검증 (Bcrypt 72자 에러 방지를 위해 평문 비밀번호가 첫 번째 인자인지 확인)
         if db_hashed_pw and pwd_context.verify(user.password, db_hashed_pw):
             access_token = create_access_token(data={"sub": user.user_id})
             return {"access_token": access_token, "token_type": "bearer"}
         
+        # 4. 검증 실패 시
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 틀렸습니다.")
     
     except Exception as e:
-        print(f"로그인 에러 발생: {e}") # 서버 로그에 에러 출력
+        # 서버 로그에 에러를 남겨서 나중에라도 문제를 볼 수 있게 합니다.
+        print(f"Login Error: {e}")
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail="서버 내부 오류가 발생했습니다.")
     
     finally:

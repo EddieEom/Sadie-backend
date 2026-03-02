@@ -1,3 +1,8 @@
+import bcrypt
+# [긴급 수리] passlib이 bcrypt의 최신 버전(4.1.0+)을 인식하지 못하는 버그 우회 코드
+if not hasattr(bcrypt, "__about__"):
+    bcrypt.__about__ = type("About", (), {"__version__": bcrypt.__version__})
+
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -15,6 +20,10 @@ from dotenv import load_dotenv
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+
+
+
+
 
 # 1. 환경 설정 로드
 load_dotenv()

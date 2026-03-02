@@ -1,65 +1,78 @@
 import bcrypt
-# [긴급 수리] passlib이 bcrypt의 최신 버전(4.1.0+)을 인식하지 못하는 버그 우회 코드
+# [긴급 수리] passlib 버그 우회
 if not hasattr(bcrypt, "__about__"):
     bcrypt.__about__ = type("About", (), {"__version__": bcrypt.__version__})
 
 from fastapi import Depends, FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from openai import OpenAI
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from typing import List, Dict, Any, Optional, cast
 import jwt
 from datetime import datetime, timedelta
-from passlib.context import CryptContext
 import os
+import random
+import time
+import aiosmtplib
+from email.message import EmailMessage
 from dotenv import load_dotenv
- 
-# 보안 라이브러리: Rate Limiting
+
+# 보안 라이브러리
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-
-
-
-
 # 1. 환경 설정 로드
 load_dotenv()
-
 HF_TOKEN = os.getenv("HF_TOKEN")
 DB_URL = os.getenv("DB_URL")
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
+# 이메일 발송 설정 (환경변수)
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+
+# 인증 코드 임시 저장소
+reset_codes: Dict[str, dict] = {}
+
 # 클라이언트 및 도구 초기화
 client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=HF_TOKEN)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-# Rate Limiter 설정
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI()
 app.state.limiter = limiter
 
-# RateLimit 에러 핸들러 등록 (Pylance 타입 에러 방지용 커스텀 핸들러)
 @app.exception_handler(RateLimitExceeded)
 async def custom_rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return _rate_limit_exceeded_handler(request, exc)
 
-# CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS", "PUT"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # 2. 데이터 모델 (Pydantic)
 class UserAuth(BaseModel):
     user_id: str
     password: str
+    email: Optional[EmailStr] = None  # 회원가입 시 필요
+
+class ResetRequest(BaseModel):
+    user_id: str
+    email: EmailStr
+
+class VerifyReset(BaseModel):
+    user_id: str
+    code: str
+    new_password: str
 
 class ChatRequest(BaseModel):
     room_id: int
@@ -68,7 +81,7 @@ class ChatRequest(BaseModel):
 class RoomCreate(BaseModel):
     title: str
 
-# 3. 유틸리티 및 인증 함수
+# 3. 유틸리티 함수
 def get_db_connection():
     return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
 
@@ -88,33 +101,30 @@ def verify_token(token: Optional[str]) -> str:
         if not user_id:
             raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
         return user_id
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="토큰이 만료되었습니다.")
-    except jwt.InvalidTokenError:
+    except Exception:
         raise HTTPException(status_code=401, detail="인증에 실패했습니다.")
 
-# --- 4. 엔드포인트: 인증 (Auth) ---
+# --- 4. 엔드포인트: 인증 & 비밀번호 재설정 ---
 
 @app.post("/signup")
 @limiter.limit("5/minute")
 async def signup(request: Request, user: UserAuth):
+    if not user.email:
+        raise HTTPException(status_code=400, detail="이메일 정보가 필요합니다.")
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        # 비밀번호 해싱 (bcrypt 직접 사용)
         salt = bcrypt.gensalt()
         hashed_pw = bcrypt.hashpw(user.password.encode('utf-8'), salt).decode('utf-8')
-
         cur.execute(
-            "INSERT INTO users (user_id, hashed_password) VALUES (%s, %s)",
-            (user.user_id, hashed_pw)
+            "INSERT INTO users (user_id, hashed_password, email) VALUES (%s, %s, %s)",
+            (user.user_id, hashed_pw, user.email)
         )
         conn.commit()
         return {"status": "success", "message": "회원가입 완료!"}
     except Exception as e:
         if conn: conn.rollback()
-        print(f"Signup Error: {e}")
-        raise HTTPException(status_code=500, detail="회원가입 중 오류 발생")
+        raise HTTPException(status_code=500, detail="회원가입 중 오류 발생 (아이디 중복 확인)")
     finally:
         cur.close()
         conn.close()
@@ -127,42 +137,100 @@ async def login(request: Request, user: UserAuth):
     try:
         cur.execute("SELECT hashed_password FROM users WHERE user_id = %s", (user.user_id,))
         result = cur.fetchone()
-
-        # 1. 사용자가 아예 없는 경우 (Pylance 에러 방지용 체크)
-        if result is None:
-            raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 틀렸습니다.")
-
-        # 2. DB에서 해시값 추출 (딕셔너리/튜플 모두 대응)
-        if isinstance(result, dict):
-            stored_hash = result.get('hashed_password')
-        else:
-            stored_hash = result[0]
-
-        # 3. 해시값이 None인 경우 체크 (Pylance가 지적한 부분)
-        if stored_hash is None:
-            raise HTTPException(status_code=401, detail="계정 정보에 문제가 있습니다.")
-
-        # 4. 검증 실행 (bcrypt 직접 사용)
-        try:
-            # stored_hash가 문자열이면 encode, 이미 바이트면 그대로 사용
-            pw_bytes = user.password.encode('utf-8')
-            hash_bytes = stored_hash.encode('utf-8') if isinstance(stored_hash, str) else stored_hash
-            
-            is_correct = bcrypt.checkpw(pw_bytes, hash_bytes)
-        except Exception as e:
-            print(f"Bcrypt Check Error: {e}")
-            is_correct = False
-
-        if is_correct:
+        if result:
+            res_dict = cast(Dict[str, Any], result) # 타입을 Dict로 명시
+        if bcrypt.checkpw(user.password.encode('utf-8'), res_dict['hashed_password'].encode('utf-8')):
             access_token = create_access_token(data={"sub": user.user_id})
             return {"access_token": access_token, "token_type": "bearer"}
-        
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 틀렸습니다.")
+    finally:
+        cur.close()
+        conn.close()
 
+@app.post("/request-reset-code")
+async def request_reset_code(req: ResetRequest):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT email FROM users WHERE user_id = %s", (req.user_id,))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if user:
+        user_dict = cast(Dict[str, Any], user) # 타입을 Dict로 명시
+    if user_dict['email'] != req.email:
+        raise HTTPException(status_code=404, detail="정보가 일치하지 않습니다.")
+    
+    code = f"{random.randint(100000, 999999)}"
+    reset_codes[req.user_id] = {"code": code, "expiry": time.time() + 300}
+
+    message = EmailMessage()
+    message["From"] = SMTP_USER
+    message["To"] = req.email
+    message["Subject"] = "[Sadie] 비밀번호 재설정 인증번호"
+    message.set_content(f"인증번호는 [{code}] 입니다. 5분 이내에 입력해주세요.")
+
+    try:
+        await aiosmtplib.send(message, hostname=SMTP_SERVER, port=SMTP_PORT, start_tls=True, username=SMTP_USER, password=SMTP_PASSWORD)
+        return {"message": "인증번호 발송 완료"}
     except Exception as e:
-        print(f"Login Error: {e}")
-        if isinstance(e, HTTPException): raise e
-        raise HTTPException(status_code=500, detail="서버 오류가 발생했습니다.")
+        print(f"Mail Error: {e}")
+        raise HTTPException(status_code=500, detail="메일 발송 실패")
+
+@app.post("/verify-and-reset")
+async def verify_and_reset(req: VerifyReset):
+    info = reset_codes.get(req.user_id)
+    if not info or info["code"] != req.code or time.time() > info["expiry"]:
+        raise HTTPException(status_code=400, detail="인증번호가 틀렸거나 만료되었습니다.")
+
+    salt = bcrypt.gensalt()
+    new_hashed_pw = bcrypt.hashpw(req.new_password.encode('utf-8'), salt).decode('utf-8')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE users SET hashed_password = %s WHERE user_id = %s", (new_hashed_pw, req.user_id))
+        conn.commit()
+        if req.user_id in reset_codes: del reset_codes[req.user_id]
+        return {"message": "비밀번호 변경 성공"}
+    except Exception:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail="변경 중 오류 발생")
+    finally:
+        cur.close()
+        conn.close()
+
+# ---- 회원탈퇴 ----
+@app.delete("/delete-account")
+@limiter.limit("3/hour") # 보안을 위해 횟수 제한을 엄격하게 둡니다.
+async def delete_account(
+    request: Request, 
+    authorization: Optional[str] = Header(None)
+):
+    current_user_id = verify_token(authorization)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        # 1. 사용자의 모든 메시지 삭제 (방 ID를 참조하여 삭제)
+        cur.execute("""
+            DELETE FROM messages 
+            WHERE room_id IN (SELECT id FROM chat_rooms WHERE user_id = %s)
+        """, (current_user_id,))
+        
+        # 2. 사용자의 모든 채팅방 삭제
+        cur.execute("DELETE FROM chat_rooms WHERE user_id = %s", (current_user_id,))
+        
+        # 3. 사용자 계정 삭제
+        cur.execute("DELETE FROM users WHERE user_id = %s", (current_user_id,))
+        
+        conn.commit()
+        return {"status": "success", "message": "그동안 Sadie와 함께해주셔서 감사합니다. 모든 데이터가 삭제되었습니다."}
+    
+    except Exception as e:
+        if conn: conn.rollback()
+        print(f"Delete Account Error: {e}")
+        raise HTTPException(status_code=500, detail="회원 탈퇴 처리 중 오류가 발생했습니다.")
+    
     finally:
         cur.close()
         conn.close()
@@ -354,42 +422,6 @@ async def update_room_title(
         cur.execute("UPDATE chat_rooms SET title = %s WHERE id = %s", (new_title, room_id))
         conn.commit()
         return {"status": "success", "message": "채팅방 제목이 변경되었습니다."}
-    finally:
-        cur.close()
-        conn.close()
-
-
-@app.delete("/delete-account")
-@limiter.limit("3/hour") # 보안을 위해 횟수 제한을 엄격하게 둡니다.
-async def delete_account(
-    request: Request, 
-    authorization: Optional[str] = Header(None)
-):
-    current_user_id = verify_token(authorization)
-    conn = get_db_connection()
-    cur = conn.cursor()
-    
-    try:
-        # 1. 사용자의 모든 메시지 삭제 (방 ID를 참조하여 삭제)
-        cur.execute("""
-            DELETE FROM messages 
-            WHERE room_id IN (SELECT id FROM chat_rooms WHERE user_id = %s)
-        """, (current_user_id,))
-        
-        # 2. 사용자의 모든 채팅방 삭제
-        cur.execute("DELETE FROM chat_rooms WHERE user_id = %s", (current_user_id,))
-        
-        # 3. 사용자 계정 삭제
-        cur.execute("DELETE FROM users WHERE user_id = %s", (current_user_id,))
-        
-        conn.commit()
-        return {"status": "success", "message": "그동안 Sadie와 함께해주셔서 감사합니다. 모든 데이터가 삭제되었습니다."}
-    
-    except Exception as e:
-        if conn: conn.rollback()
-        print(f"Delete Account Error: {e}")
-        raise HTTPException(status_code=500, detail="회원 탈퇴 처리 중 오류가 발생했습니다.")
-    
     finally:
         cur.close()
         conn.close()

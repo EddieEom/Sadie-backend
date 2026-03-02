@@ -102,6 +102,10 @@ async def signup(request: Request, user: UserAuth):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        # 비밀번호 해싱 전 간단한 검증 (백엔드 2중 방어)
+        if len(user.password) < 8:
+            raise HTTPException(status_code=400, detail={"code": "PW_TOO_SHORT", "msg": "비밀번호가 너무 짧습니다."})
+
         hashed_pw = pwd_context.hash(user.password)
         cur.execute(
             "INSERT INTO users (user_id, hashed_password) VALUES (%s, %s)",
@@ -109,9 +113,12 @@ async def signup(request: Request, user: UserAuth):
         )
         conn.commit()
         return {"status": "success", "message": "회원가입 완료!"}
+    except psycopg2.errors.UniqueViolation:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=400, detail={"code": "DUPLICATE_ID", "msg": "이미 존재하는 아이디입니다."})
     except Exception as e:
         if conn: conn.rollback()
-        raise HTTPException(status_code=400, detail="중복된 아이디이거나 가입 정보가 올바르지 않습니다.")
+        raise HTTPException(status_code=500, detail={"code": "SERVER_ERROR", "msg": "서버 내부 오류가 발생했습니다."})
     finally:
         cur.close()
         conn.close()

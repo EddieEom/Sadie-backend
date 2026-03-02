@@ -127,20 +127,37 @@ async def signup(request: Request, user: UserAuth):
 @limiter.limit("10/minute")
 async def login(request: Request, user: UserAuth):
     conn = get_db_connection()
-    cur = conn.cursor()
+    # 딕셔너리 형태로 결과를 받도록 설정 (psycopg2 기준)
+    # 만약 기본 커서라면 result[0]으로 접근해야 합니다.
+    cur = conn.cursor() 
     try:
         cur.execute("SELECT hashed_password FROM users WHERE user_id = %s", (user.user_id,))
         result = cur.fetchone()
-        if result and isinstance(result, dict):
-            hashed_pw = result.get('hashed_password')
-            if hashed_pw and pwd_context.verify(user.password, str(hashed_pw)):
-                access_token = create_access_token(data={"sub": user.user_id})
-                return {"access_token": access_token, "token_type": "bearer"}
+
+        if not result:
+            raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 틀렸습니다.")
+
+        # 결과가 딕셔너리일 때와 튜플일 때를 모두 고려
+        if isinstance(result, dict):
+            db_hashed_pw = result.get('hashed_password')
+        else:
+            db_hashed_pw = result[0] # 튜플인 경우 첫 번째 요소
+
+        # 중요: pwd_context.verify(평문비밀번호, DB의해시값)
+        if db_hashed_pw and pwd_context.verify(user.password, db_hashed_pw):
+            access_token = create_access_token(data={"sub": user.user_id})
+            return {"access_token": access_token, "token_type": "bearer"}
+        
         raise HTTPException(status_code=401, detail="아이디 또는 비밀번호가 틀렸습니다.")
+    
+    except Exception as e:
+        print(f"로그인 에러 발생: {e}") # 서버 로그에 에러 출력
+        raise HTTPException(status_code=500, detail="서버 내부 오류가 발생했습니다.")
+    
     finally:
         cur.close()
         conn.close()
-
+        
 # --- 5. 엔드포인트: AI 채팅 (Sadie Persona) ---
 
 @app.post("/chat")
@@ -211,7 +228,7 @@ async def chat_with_ai(
         completion = client.chat.completions.create(
             model="openai/gpt-oss-20b",
             messages=messages, # type: ignore
-            max_tokens=1000,
+            max_tokens=1500,
             temperature=0.75
         )
         ai_response = completion.choices[0].message.content

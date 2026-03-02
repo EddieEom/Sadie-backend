@@ -63,7 +63,7 @@ app.add_middleware(
 class UserAuth(BaseModel):
     user_id: str
     password: str
-    email: Optional[EmailStr] = None  # 회원가입 시 필요
+    email: str
 
 class ResetRequest(BaseModel):
     user_id: str

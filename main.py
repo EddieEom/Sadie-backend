@@ -13,7 +13,8 @@ from openai import OpenAI
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 from typing import Any
-import resend
+import sib_api_v3_sdk
+from sib_api_v3_sdk.rest import ApiException
 
 # 보안/제한 라이브러리
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -34,7 +35,13 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
 # SMTP_USER = os.getenv("SMTP_USER", "")
 # SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-resend.api_key = os.getenv("RESEND_API_KEY")
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "")
+
+
+# Brevo 설정 초기화
+configuration = sib_api_v3_sdk.Configuration()
+configuration.api_key['api-key'] = BREVO_API_KEY
+api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
 
 # 인증 코드 임시 저장소
 reset_codes: Dict[str, dict] = {}
@@ -171,24 +178,27 @@ async def request_reset_code(req: ResetRequest):
     reset_codes[req.user_id] = {"code": code, "expiry": time.time() + 300}
 
     try:
-        # 이 호출은 HTTPS(443 포트)를 사용하므로 Render의 차단을 우회합니다.
-        params: Any = {
-            "from": "Sadie <onboarding@resend.dev>",
-            "to": [req.email], 
-            "subject": "[Sadie] 비밀번호 재설정 인증번호",
-            "html": f"""
-                <div style="font-family: sans-serif; padding: 20px;">
-                    <h3>비밀번호 재설정 인증번호</h3>
-                    <p>인증번호는 <strong>{code}</strong> 입니다.</p>
-                    <p>5분 이내에 입력해주세요.</p>
+        # Brevo API 호출 (Render의 443 포트를 이용하므로 차단 안 됨)
+        send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+            sender={"name": "Sadie", "email": "sadie.noreply@gmail.com"}, # 인증받은 내 Gmail
+            to=[{"email": req.email}], # 이제 전 세계 누구에게나 발송 가능!
+            subject="[Sadie] 비밀번호 재설정 인증번호",
+            html_content=f"""
+                <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee;">
+                    <h2 style="color: #008080;">비밀번호 재설정 안내</h2>
+                    <p>안녕하세요, Sadie 상담소입니다.</p>
+                    <p>요청하신 인증번호는 다음과 같습니다:</p>
+                    <div style="font-size: 24px; font-weight: bold; color: #333; margin: 20px 0;">{code}</div>
+                    <p>인증번호는 5분 후 만료됩니다.</p>
                 </div>
-            """,
-        }
-        resend.Emails.send(params)
+            """
+        )
+        api_instance.send_transac_email(send_smtp_email)
         return {"message": "인증번호 발송 완료"}
-    except Exception as e:
-        print(f"Resend API Error: {e}")
-        raise HTTPException(status_code=500, detail="메일 발송 서비스 오류")
+        
+    except ApiException as e:
+        print(f"Brevo API Error: {e}")
+        raise HTTPException(status_code=500, detail="메일 발송 중 오류가 발생했습니다.")
 
 @app.post("/verify-and-reset")
 async def verify_and_reset(req: VerifyReset):

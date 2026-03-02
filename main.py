@@ -3,7 +3,7 @@ import bcrypt
 if not hasattr(bcrypt, "__about__"):
     bcrypt.__about__ = type("About", (), {"__version__": bcrypt.__version__})
 
-from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi import Depends, FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
@@ -53,10 +53,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS", "PUT"],
     allow_headers=["*"],
 )
-
 # 2. 데이터 모델 (Pydantic)
 class UserAuth(BaseModel):
     user_id: str
@@ -326,6 +325,71 @@ async def delete_room(request: Request, room_id: int, authorization: Optional[st
         cur.execute("DELETE FROM chat_rooms WHERE id = %s", (room_id,))
         conn.commit()
         return {"status": "success", "message": "채팅방이 삭제되었습니다."}
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.put("/rooms/{room_id}")
+async def update_room_title(
+    room_id: int, 
+    data: dict, 
+    authorization: Optional[str] = Header(None) # 인증 방식 통일
+):
+    current_user_id = verify_token(authorization) # 토큰 검증
+    new_title = data.get('title')
+    
+    if not new_title:
+        raise HTTPException(status_code=400, detail="제목이 비어있습니다.")
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 소유권 확인 추가 (보안)
+        cur.execute("SELECT user_id FROM chat_rooms WHERE id = %s", (room_id,))
+        room = cur.fetchone()
+        if not room or cast(Dict[str, Any], room).get('user_id') != current_user_id:
+            raise HTTPException(status_code=403, detail="수정 권한이 없습니다.")
+
+        cur.execute("UPDATE chat_rooms SET title = %s WHERE id = %s", (new_title, room_id))
+        conn.commit()
+        return {"status": "success", "message": "채팅방 제목이 변경되었습니다."}
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.delete("/delete-account")
+@limiter.limit("3/hour") # 보안을 위해 횟수 제한을 엄격하게 둡니다.
+async def delete_account(
+    request: Request, 
+    authorization: Optional[str] = Header(None)
+):
+    current_user_id = verify_token(authorization)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        # 1. 사용자의 모든 메시지 삭제 (방 ID를 참조하여 삭제)
+        cur.execute("""
+            DELETE FROM messages 
+            WHERE room_id IN (SELECT id FROM chat_rooms WHERE user_id = %s)
+        """, (current_user_id,))
+        
+        # 2. 사용자의 모든 채팅방 삭제
+        cur.execute("DELETE FROM chat_rooms WHERE user_id = %s", (current_user_id,))
+        
+        # 3. 사용자 계정 삭제
+        cur.execute("DELETE FROM users WHERE user_id = %s", (current_user_id,))
+        
+        conn.commit()
+        return {"status": "success", "message": "그동안 Sadie와 함께해주셔서 감사합니다. 모든 데이터가 삭제되었습니다."}
+    
+    except Exception as e:
+        if conn: conn.rollback()
+        print(f"Delete Account Error: {e}")
+        raise HTTPException(status_code=500, detail="회원 탈퇴 처리 중 오류가 발생했습니다.")
+    
     finally:
         cur.close()
         conn.close()

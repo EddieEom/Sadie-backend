@@ -1,5 +1,4 @@
 import bcrypt
-import resend
 import os
 import random
 import time

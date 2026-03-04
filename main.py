@@ -6,8 +6,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 # 분리한 라우터들 import (파일명과 위치 확인 필수)
-from backend.routes import auth
-from routes import user, chat
+from routes import auth, user, chat
 
 app = FastAPI()
 

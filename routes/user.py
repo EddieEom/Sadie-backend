@@ -1,26 +1,31 @@
 import os
-import shutil
-from pathlib import Path
-from typing import Optional, Dict, Any, cast
+from typing import Optional, cast
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header
+from supabase import create_client, Client
 
-# 개편된 구조에 맞춰 import 경로 수정
 from core.database import get_db_connection
 from core.security import verify_token
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-# 이미지 저장 경로 설정
-UPLOAD_DIR = Path("static/profiles")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# 1. 환경 변수를 가져오되, 없을 경우를 대비해 빈 문자열이나 에러 처리를 합니다.
+SUPABASE_URL: str = os.getenv("SUPABASE_URL") or ""
+SUPABASE_KEY: str = os.getenv("SUPABASE_KEY") or ""
+
+# URL이나 KEY가 비어있으면 서버 시작 시 알 수 있게 체크 (선택 사항)
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("⚠️ 경고: SUPABASE 환경 변수가 설정되지 않았습니다.")
+
+# 2. create_client에 들어가는 값이 str임을 명시적으로 알려줍니다.
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 @router.patch("/me/profile")
 async def update_profile(
     nickname: str = Form(...),
     profile_image: Optional[UploadFile] = File(None),
+    google_image_url: Optional[str] = Form(None),
     authorization: Optional[str] = Header(None)
 ):
-    # 1. 토큰 검증
     current_user_id = verify_token(authorization)
     
     conn = get_db_connection()
@@ -29,71 +34,38 @@ async def update_profile(
     try:
         image_url = None
 
-        # 2. 이미지 파일 처리
         if profile_image and profile_image.filename:
-            fname: str = profile_image.filename
-            file_extension = os.path.splitext(fname)[1]
-            
-            # 파일명을 user_id로 고정하여 프로필 이미지 교체 시 이전 파일 관리 용이
-            file_name = f"{current_user_id}{file_extension}"
-            file_path = UPLOAD_DIR / file_name
+            file_content = await profile_image.read()
+            file_ext = os.path.splitext(profile_image.filename)[1]
+            file_path = f"profiles/{current_user_id}{file_ext}"
 
-            # 서버 로컬에 파일 저장
-            with file_path.open("wb") as buffer:
-                shutil.copyfileobj(profile_image.file, buffer)
+            # 3. file_options 타입 에러 해결
+            # dict 형태를 명시적으로 전달하거나, 필요한 값만 넘깁니다.
+            supabase.storage.from_("profiles").upload(
+                path=file_path,
+                file=file_content,
+                file_options={
+                    "upsert": "true", 
+                    "content-type": str(profile_image.content_type) # None 방지
+                }
+            )
+            image_url = supabase.storage.from_("profiles").get_public_url(file_path)
 
-            # DB에 저장할 상대 경로
-            image_url = f"/static/profiles/{file_name}"
+        elif google_image_url:
+            image_url = google_image_url
 
-        # 3. DB 업데이트
+        # (이후 DB 업데이트 로직은 동일...)
         if image_url:
-            cur.execute(
-                "UPDATE users SET nickname = %s, profile_image = %s WHERE user_id = %s",
-                (nickname, image_url, current_user_id)
-            )
+            cur.execute("UPDATE users SET nickname = %s, profile_image = %s WHERE user_id = %s", (nickname, image_url, current_user_id))
         else:
-            cur.execute(
-                "UPDATE users SET nickname = %s WHERE user_id = %s",
-                (nickname, current_user_id)
-            )
+            cur.execute("UPDATE users SET nickname = %s WHERE user_id = %s", (nickname, current_user_id))
         
         conn.commit()
-        
-        return {
-            "status": "success",
-            "nickname": nickname,
-            "profile_image": image_url
-        }
+        return {"status": "success", "nickname": nickname, "profile_image": image_url}
 
     except Exception as e:
         if conn: conn.rollback()
-        print(f"Update Profile Error: {e}")
-        raise HTTPException(status_code=500, detail="프로필 업데이트 중 오류가 발생했습니다.")
-    finally:
-        cur.close()
-        conn.close()
-
-@router.get("/me")
-async def get_my_profile(authorization: Optional[str] = Header(None)):
-    current_user_id = verify_token(authorization)
-    
-    conn = get_db_connection()
-    cur = conn.cursor()
-    
-    try:
-        cur.execute(
-            "SELECT user_id, email, nickname, profile_image FROM users WHERE user_id = %s",
-            (current_user_id,)
-        )
-        user = cur.fetchone()
-        
-        if not user:
-            raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
-            
-        return {
-            "status": "success",
-            "data": user
-        }
+        raise HTTPException(status_code=500, detail=f"프로필 업데이트 오류: {str(e)}")
     finally:
         cur.close()
         conn.close()

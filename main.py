@@ -1,5 +1,3 @@
-import os
-
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -17,11 +15,9 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.exception_handler(RateLimitExceeded)(_rate_limit_exceeded_handler)
 
-# 2. 정적 파일 서버 설정 (폴더가 있을 때만 실행)
-if not os.path.exists("static"):
-    os.makedirs("static") # 폴더가 없으면 자동으로 만듦
+
 # 2. 정적 파일 서버 설정 (프로필 이미지 등)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # 3. CORS 설정 (기존 유지)
 app.add_middleware(

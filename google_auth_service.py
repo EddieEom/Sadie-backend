@@ -2,16 +2,12 @@ import os
 from fastapi import HTTPException
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
-from pydantic import BaseModel
 from typing import Dict, Any, cast
 
-# 구글 클라이언트 ID (환경변수 권장)
+# 구글 클라이언트 ID
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
-class GoogleLoginRequest(BaseModel):
-    id_token: str
-
-async def process_google_login(data: GoogleLoginRequest, get_db_connection, create_access_token):
+async def process_google_login(data, get_db_connection, create_access_token):
     try:
         # 1. 구글 토큰 검증
         id_info = id_token.verify_oauth2_token(

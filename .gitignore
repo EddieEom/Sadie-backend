@@ -1,4 +1,16 @@
-.env
-__pycache__/
-venv/
 *.pyc
+
+
+# Python 캐시
+*.py[cod]
+__pycache__/
+# 환경 변수 (절대 올리면 안 됨)
+.env
+
+# 가상 환경
+venv/
+.venv/
+
+# 정적 파일 및 업로드 이미지 (선택 사항)
+static/profiles/*
+!static/profiles/.gitkeep

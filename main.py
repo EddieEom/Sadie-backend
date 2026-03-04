@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from typing import Any
 import sib_api_v3_sdk
 from sib_api_v3_sdk.rest import ApiException
+from auth import GoogleLoginRequest, process_google_login
 
 # 보안/제한 라이브러리
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -107,14 +108,14 @@ def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, str(SECRET_KEY), algorithm=ALGORITHM)
 
 def verify_token(token: Optional[str]) -> str:
     if token is None:
         raise HTTPException(status_code=401, detail="토큰이 없습니다.")
     try:
         actual_token = token.replace("Bearer ", "")
-        payload = jwt.decode(actual_token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(actual_token, str(SECRET_KEY), algorithms=[ALGORITHM])
         user_id = cast(Optional[str], payload.get("sub"))
         if not user_id:
             raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
@@ -498,6 +499,11 @@ async def update_room_title(
     finally:
         cur.close()
         conn.close()
+
+# 구글 로그인 엔드포인트
+@app.post("/auth/google")
+async def google_auth(data: GoogleLoginRequest):
+    return await process_google_login(data, get_db_connection, create_access_token)
 
 @app.get("/")
 def read_root():

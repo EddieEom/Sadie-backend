@@ -9,7 +9,6 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
 async def process_google_login(data, get_db_connection, create_access_token):
     try:
-        # 1. 구글 토큰 검증
         id_info = id_token.verify_oauth2_token(
             data.id_token, 
             google_requests.Request(), 
@@ -18,6 +17,9 @@ async def process_google_login(data, get_db_connection, create_access_token):
 
         email = id_info.get("email")
         user_id = f"google_{id_info.get('sub')}" 
+        # 구글에서 주는 기본 정보 추출
+        google_name = id_info.get("name", "")
+        google_picture = id_info.get("picture")
 
         if not email:
             raise HTTPException(status_code=400, detail="이메일 정보를 가져올 수 없습니다.")
@@ -26,24 +28,37 @@ async def process_google_login(data, get_db_connection, create_access_token):
         cur = conn.cursor()
         
         try:
-            # 2. 기존 유저 확인
-            cur.execute("SELECT user_id FROM users WHERE email = %s", (email,))
+            # 2. 기존 유저 확인 (닉네임이 있는지까지 확인하면 더 좋습니다)
+            cur.execute("SELECT user_id, nickname FROM users WHERE email = %s", (email,))
             user = cur.fetchone()
 
+            is_new_user = False
             if not user:
-                # 3. 신규 유저 자동 등록
+                # 3. 신규 유저 등록
                 cur.execute(
                     "INSERT INTO users (user_id, hashed_password, email) VALUES (%s, %s, %s)",
                     (user_id, "SOCIAL_AUTH", email)
                 )
                 conn.commit()
                 final_user_id = user_id
+                is_new_user = True
             else:
-                final_user_id = cast(Dict[str, Any], user)['user_id']
+                user_dict = cast(Dict[str, Any], user)
+                final_user_id = user_dict['user_id']
+                # 아이디는 있는데 닉네임이 없다면 온보딩을 거치게 하기 위해 신규 유저로 취급
+                if not user_dict.get('nickname'):
+                    is_new_user = True
 
-            # 4. 토큰 생성
+            # 4. 토큰 생성 및 응답 데이터 구성
             access_token = create_access_token(data={"sub": final_user_id})
-            return {"access_token": access_token, "token_type": "bearer"}
+            
+            return {
+                "access_token": access_token, 
+                "token_type": "bearer",
+                "is_new_user": is_new_user,
+                "google_name": google_name,
+                "google_picture": google_picture
+            }
 
         finally:
             cur.close()

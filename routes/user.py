@@ -13,14 +13,15 @@ SUPABASE_URL: str = os.getenv("SUPABASE_URL") or ""
 SUPABASE_KEY: str = os.getenv("SUPABASE_KEY") or ""
 
 # Supabase 클라이언트 초기화 (URL/KEY가 없어도 서버가 죽지 않도록 방어)
+# 2. 선언부 수정
+supabase: Optional[Client] = None # 처음부터 Optional로 선언
+
 try:
     if SUPABASE_URL and SUPABASE_KEY:
-        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     else:
-        supabase = None
         print("Warning: Supabase credentials missing.")
 except Exception as e:
-    supabase = None
     print(f"Error initializing Supabase: {e}")
 
 @router.patch("/me/profile")

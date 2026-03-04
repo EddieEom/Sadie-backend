@@ -12,8 +12,16 @@ router = APIRouter(prefix="/users", tags=["users"])
 SUPABASE_URL: str = os.getenv("SUPABASE_URL") or ""
 SUPABASE_KEY: str = os.getenv("SUPABASE_KEY") or ""
 
-# Supabase 클라이언트 초기화
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Supabase 클라이언트 초기화 (URL/KEY가 없어도 서버가 죽지 않도록 방어)
+try:
+    if SUPABASE_URL and SUPABASE_KEY:
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    else:
+        supabase = None
+        print("Warning: Supabase credentials missing.")
+except Exception as e:
+    supabase = None
+    print(f"Error initializing Supabase: {e}")
 
 @router.patch("/me/profile")
 async def update_profile(
@@ -29,28 +37,37 @@ async def update_profile(
     try:
         image_url = None
 
-        # 1. 이미지 파일이 직접 업로드된 경우
-        if profile_image and profile_image.filename:
-            file_content = await profile_image.read()
-            file_ext = os.path.splitext(profile_image.filename)[1]
-            file_path = f"profiles/{current_user_id}{file_ext}"
+        # 1. 이미지 처리 로직 (Supabase 에러가 나도 전체가 멈추지 않도록 개별 try-except 적용)
+        try:
+            # 직접 업로드한 파일이 있는 경우
+            if profile_image and profile_image.filename and supabase:
+                file_content = await profile_image.read()
+                file_ext = os.path.splitext(profile_image.filename)[1]
+                file_path = f"profiles/{current_user_id}{file_ext}"
 
-            # Supabase Storage 업로드
-            supabase.storage.from_("profiles").upload(
-                path=file_path,
-                file=file_content,
-                file_options={
-                    "upsert": "true", 
-                    "content-type": str(profile_image.content_type)
-                }
-            )
-            image_url = supabase.storage.from_("profiles").get_public_url(file_path)
+                # Supabase Storage 업로드
+                supabase.storage.from_("profiles").upload(
+                    path=file_path,
+                    file=file_content,
+                    file_options={
+                        "upsert": "true", 
+                        "content-type": str(profile_image.content_type)
+                    }
+                )
+                image_url = supabase.storage.from_("profiles").get_public_url(file_path)
+            
+            # 파일은 없지만 구글 이미지 URL을 사용하는 경우
+            elif google_image_url:
+                image_url = google_image_url
+                
+        except Exception as img_err:
+            # 이미지 업로드 실패 시 로그만 남기고 닉네임 업데이트는 진행할 수 있게 함
+            print(f"Image Upload Failed (Ignored): {img_err}")
+            # 이미지가 실패해도 기존 구글 이미지 URL이 있다면 그것이라도 유지
+            if google_image_url:
+                image_url = google_image_url
 
-        # 2. 파일은 없지만 구글 이미지 URL을 쓰기로 한 경우
-        elif google_image_url:
-            image_url = google_image_url
-
-        # 3. DB 업데이트
+        # 2. DB 업데이트 (핵심 로직)
         if image_url:
             cur.execute(
                 "UPDATE users SET nickname = %s, profile_image = %s WHERE user_id = %s",
@@ -71,7 +88,7 @@ async def update_profile(
 
     except Exception as e:
         if conn: conn.rollback()
-        print(f"Update Error: {e}")
+        print(f"Critical Update Error: {e}")
         raise HTTPException(status_code=500, detail="프로필 업데이트 중 오류가 발생했습니다.")
     finally:
         cur.close()
@@ -84,7 +101,6 @@ async def get_my_profile(authorization: Optional[str] = Header(None)):
     cur = conn.cursor()
     
     try:
-        # 가입일(created_at) 포함 정보 조회
         cur.execute(
             "SELECT user_id, email, nickname, profile_image, created_at FROM users WHERE user_id = %s",
             (current_user_id,)
@@ -94,7 +110,6 @@ async def get_my_profile(authorization: Optional[str] = Header(None)):
         if not user:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
 
-        # RealDictCursor 사용 시 Dict로 캐스팅하여 타입 에러 방지
         user_data = cast(Dict[str, Any], user)
             
         return {
@@ -107,6 +122,9 @@ async def get_my_profile(authorization: Optional[str] = Header(None)):
                 "created_at": user_data['created_at'].isoformat() if user_data.get('created_at') else None
             }
         }
+    except Exception as e:
+        print(f"Profile Fetch Error: {e}")
+        raise HTTPException(status_code=500, detail="프로필 정보를 가져오는데 실패했습니다.")
     finally:
         cur.close()
         conn.close()

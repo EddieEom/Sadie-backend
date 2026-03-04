@@ -46,38 +46,6 @@ class ChatRequest(BaseModel):
 
 class RoomCreate(BaseModel):
     """
-    채팅방 생성 모델 (Zeta 스타일 확장)
-    title: 방 제목
-    chatbot_id: 대화할 캐릭터의 ID (선택 사항, 없으면 기본 Sadie 상담사)
+    채팅방 생성 모델
     """
     title: str
-    chatbot_id: Optional[int] = None
-
-
-# --- 3. Zeta 스타일 캐릭터(챗봇) 관련 모델 ---
-class ChatbotCreate(BaseModel):
-    """캐릭터(챗봇) 생성 시 사용하는 모델"""
-    bot_name: str
-    introduction: Optional[str] = None
-    persona: str  # 캐릭터 성격 및 세계관 설정
-    first_message: Optional[str] = None
-    categories: Optional[List[str]] = []
-    is_public: bool = True
-
-class ChatbotUpdate(BaseModel):
-    """기존 캐릭터 수정 시 사용하는 모델"""
-    bot_name: Optional[str] = None
-    introduction: Optional[str] = None
-    persona: Optional[str] = None
-    first_message: Optional[str] = None
-    categories: Optional[List[str]] = None
-    is_public: Optional[bool] = None
-
-class ChatbotResponse(BaseModel):
-    """마이페이지나 목록에서 캐릭터 정보를 반환할 때 사용하는 모델"""
-    id: int
-    bot_name: str
-    introduction: Optional[str]
-    profile_image: Optional[str]
-    is_public: bool
-    created_at: str

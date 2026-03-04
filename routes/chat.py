@@ -170,5 +170,3 @@ async def update_room_title(room_id: int, data: dict, authorization: Optional[st
     finally:
         cur.close()
         conn.close()
-
-

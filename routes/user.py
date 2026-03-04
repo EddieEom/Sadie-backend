@@ -9,8 +9,15 @@ from core.security import verify_token
 router = APIRouter(prefix="/users", tags=["users"])
 
 # 환경 변수 설정 (os.getenv 결과가 None일 경우를 대비해 "" 처리)
+# 부근 수정
 SUPABASE_URL: str = os.getenv("SUPABASE_URL") or ""
 SUPABASE_KEY: str = os.getenv("SUPABASE_KEY") or ""
+
+# URL이나 KEY가 없으면 서버 시작 단계에서 에러를 내서 알려줘야 합니다.
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("❌ 에러: SUPABASE_URL 또는 SUPABASE_KEY가 설정되지 않았습니다.")
+else:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Supabase 클라이언트 초기화
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)

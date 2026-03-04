@@ -16,7 +16,7 @@ app.state.limiter = limiter
 app.exception_handler(RateLimitExceeded)(_rate_limit_exceeded_handler)
 
 # 2. 정적 파일 서버 설정 (프로필 이미지 등)
-# app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # 3. CORS 설정 (기존 유지)
 app.add_middleware(

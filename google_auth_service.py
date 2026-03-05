@@ -34,10 +34,13 @@ async def process_google_login(data, get_db_connection, create_access_token):
 
             is_new_user = False
             if not user:
-                # 3. 신규 유저 등록
+                # 3. 신규 유저 등록 (is_social 필드 추가!)
                 cur.execute(
-                    "INSERT INTO users (user_id, hashed_password, email) VALUES (%s, %s, %s)",
-                    (user_id, "SOCIAL_AUTH", email)
+                    """
+                    INSERT INTO users (user_id, hashed_password, email, is_social) 
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (user_id, "SOCIAL_AUTH", email, True) # True 값을 명시적으로 전달
                 )
                 conn.commit()
                 final_user_id = user_id

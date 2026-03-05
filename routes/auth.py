@@ -15,6 +15,7 @@ from schemas import (
     UserAuth, LoginRequest, ResetRequest, 
     VerifyReset, PasswordChange, GoogleLoginRequest
 )
+from psycopg2.extras import RealDictCursor
 
 # [긴급 수리] passlib/bcrypt 버그 우회
 if not hasattr(bcrypt, "__about__"):
@@ -131,19 +132,53 @@ async def verify_and_reset(req: VerifyReset):
         conn.close()
 
 @router.delete("/delete-account")
-async def delete_account(request: Request, authorization: Optional[str] = Header(None)):
+async def delete_account(
+    request: Request, 
+    authorization: Optional[str] = Header(None)
+):
     current_user_id = verify_token(authorization)
+    
+    # 프론트에서 보낸 JSON 바디(비밀번호)를 읽습니다.
+    # DELETE 요청도 바디를 가질 수 있습니다.
+    data = await request.json()
+    password_provided = data.get("password")
+
     conn = get_db_connection()
-    cur = conn.cursor()
+    # 컬럼명으로 데이터를 가져오기 위해 RealDictCursor를 사용합니다.
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
     try:
+        # 1. 유저의 소셜 가입 여부와 비밀번호 해시를 가져옴
+        cur.execute("SELECT hashed_password, is_social FROM users WHERE user_id = %s", (current_user_id,))
+        user_res = cur.fetchone()
+
+        if not user_res:
+            raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+
+        user_dict = cast(Dict[str, Any], user_res)
+        
+        # 2. 일반 계정(is_social = False)인 경우에만 비밀번호 검증
+        if not user_dict.get('is_social'):
+            if not password_provided:
+                raise HTTPException(status_code=400, detail="비밀번호를 입력해주세요.")
+            
+            # 기존 login 로직에서 사용하신 bcrypt 검증 방식 그대로 사용
+            if not bcrypt.checkpw(password_provided.encode('utf-8'), user_dict['hashed_password'].encode('utf-8')):
+                raise HTTPException(status_code=401, detail="비밀번호가 일치하지 않습니다.")
+
+        # 3. 데이터 삭제 (기존 로직 유지)
         cur.execute("DELETE FROM messages WHERE room_id IN (SELECT id FROM chat_rooms WHERE user_id = %s)", (current_user_id,))
         cur.execute("DELETE FROM chat_rooms WHERE user_id = %s", (current_user_id,))
         cur.execute("DELETE FROM users WHERE user_id = %s", (current_user_id,))
+        
         conn.commit()
-        return {"status": "success", "message": "데이터가 삭제되었습니다."}
+        return {"status": "success", "message": "회원 탈퇴 및 모든 데이터 삭제 완료"}
+
     except Exception as e:
         if conn: conn.rollback()
-        raise HTTPException(status_code=500, detail="회원 탈퇴 처리 중 오류 발생")
+        # 에러가 HTTPException이면 그대로 던지고, 아니면 500 에러 발생
+        if isinstance(e, HTTPException): raise e
+        raise HTTPException(status_code=500, detail=f"탈퇴 처리 중 오류 발생: {str(e)}")
     finally:
         cur.close()
         conn.close()

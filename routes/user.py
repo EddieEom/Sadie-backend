@@ -24,7 +24,7 @@ try:
 except Exception as e:
     print(f"Error initializing Supabase: {e}")
 
-@router.patch("/me/profile")
+@router.post("/me/profile")
 async def update_profile(
     nickname: str = Form(...),
     profile_image: Optional[UploadFile] = File(None),

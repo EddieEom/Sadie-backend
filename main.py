@@ -30,8 +30,8 @@ app.add_middleware(
 
 # 4. 라우터 등록 (경로 겹침 방지)
 # auth.py와 chat.py 내부에서 prefix를 조절했으므로 아래처럼 등록합니다.
-app.include_router(auth.router)
 app.include_router(user.router)
+app.include_router(auth.router)
 app.include_router(chat.router)
 
 @app.get("/")

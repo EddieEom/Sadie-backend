@@ -151,10 +151,12 @@ async def get_me(authorization: Optional[str] = Header(None)):
         if not user_res:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
             
+        print(f"DB에서 가져온 데이터: {user_res}")
+        
         # 프론트엔드(Flutter)의 형식에 맞춰 반환
         return {
             "status": "success",
-            "data": user_res
+            "data": dict(user_res)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"내 정보 조회 중 오류: {str(e)}")

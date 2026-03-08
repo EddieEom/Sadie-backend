@@ -166,11 +166,17 @@ async def delete_account(
             if not bcrypt.checkpw(password_provided.encode('utf-8'), user_dict['hashed_password'].encode('utf-8')):
                 raise HTTPException(status_code=401, detail="비밀번호가 일치하지 않습니다.")
 
-        # 3. 데이터 삭제 (기존 로직 유지)
-        cur.execute("DELETE FROM messages WHERE room_id IN (SELECT id FROM chat_rooms WHERE user_id = %s)", (current_user_id,))
-        cur.execute("DELETE FROM chat_rooms WHERE user_id = %s", (current_user_id,))
-        cur.execute("DELETE FROM users WHERE user_id = %s", (current_user_id,))
+        # 3. 데이터 삭제 (추가된 분석 테이블 포함)
+            cur.execute("DELETE FROM user_daily_moods WHERE user_id = %s", (current_user_id,))
+            cur.execute("DELETE FROM user_reports WHERE user_id = %s", (current_user_id,))
+            cur.execute("DELETE FROM user_psych_profiles WHERE user_id = %s", (current_user_id,))
+
+            # 기존 로직 (채팅 내역 등)
+            cur.execute("DELETE FROM messages WHERE room_id IN (SELECT id FROM chat_rooms WHERE user_id = %s)", (current_user_id,))
+            cur.execute("DELETE FROM chat_rooms WHERE user_id = %s", (current_user_id,))
+            cur.execute("DELETE FROM users WHERE user_id = %s", (current_user_id,))
         
+
         conn.commit()
         return {"status": "success", "message": "회원 탈퇴 및 모든 데이터 삭제 완료"}
 
@@ -213,3 +219,10 @@ async def google_auth(data: GoogleLoginRequest): # schemas에서 가져온 타�
         get_db_connection, 
         create_access_token
     )
+
+
+
+async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
+    """토큰을 검증하고 현재 유저의 정보를 반환합니다."""
+    user_id = verify_token(authorization) # 내부에서 유효하지 않으면 401 raise 한다고 가정
+    return {"id": user_id}

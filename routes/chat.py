@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Header, Request
 from typing import List, Dict, Any, Optional, cast
 from openai import OpenAI
+import requests  # 벡터 변환용 API 호출을 위해 추가
 
 from core.database import get_db_connection
 from core.security import verify_token
@@ -10,6 +11,20 @@ from schemas import ChatRequest, RoomCreate
 router = APIRouter(tags=["chat"])
 
 client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=HF_TOKEN)
+
+# 임베딩 API 주소 (한국어 성능이 우수한 모델)
+EMBEDDING_API_URL = "https://api-inference.huggingface.co/models/jhgan/ko-sroberta-multitask"
+
+def get_embedding(text: str) -> Optional[List[float]]:
+    """HF_TOKEN을 사용하여 텍스트를 벡터로 변환 (서버 메모리 절약)"""
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    try:
+        response = requests.post(EMBEDDING_API_URL, headers=headers, json={"inputs": text})
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except Exception:
+        return None
 
 @router.post("/chat")
 async def chat_with_ai(request: Request, chat_data: ChatRequest, authorization: Optional[str] = Header(None)):
@@ -31,7 +46,27 @@ async def chat_with_ai(request: Request, chat_data: ChatRequest, authorization: 
         db_history = cur.fetchall()
         db_history.reverse()
 
-        system_prompt = """
+        # -----------------------------------------------------------
+        # [RAG 단계] Supabase에서 유사한 상담 지식 검색
+        # -----------------------------------------------------------
+        query_vector = get_embedding(chat_data.message)
+        knowledge_context = ""
+
+        if query_vector:
+            # 벡터 유사도 검색 (코사인 유사도 연산자 <=> 사용)
+            cur.execute("""
+                SELECT content FROM counseling_knowledge 
+                ORDER BY embedding <=> %s::vector 
+                LIMIT 2
+            """, (query_vector,))
+            rows = cur.fetchall()
+            if rows:
+                knowledge_context = "\n".join([f"- {row[0]}" for row in rows])
+
+        # -----------------------------------------------------------
+        # [시스템 프롬프트] 기본 페르소나 + 검색된 지식 결합
+        # -----------------------------------------------------------
+        base_system_prompt = """
             너는 'Sadie'라는 이름의 전문 심리 상담사야 하지만 친구처럼 친근하게 반말로 다가가야해. 
             [페르소나]
             - 공감 능력이 뛰어나고, 사용자의 감정을 먼저 읽어준 뒤 사용자가 조언이 필요하다고 느낄때 조언을 시작해.
@@ -55,9 +90,18 @@ async def chat_with_ai(request: Request, chat_data: ChatRequest, authorization: 
             14. 사용자에게 공감할때는 다양한 표현을 사용해서 공감해줘.
             15. 조언을 해줄때는 RAG 방식으로 웹서치를 통해서 최신 심리 상담 사례와 트렌드를 반영한 현실적이고 구체적인 조언을 해줘.
             16. 사용자에게 조언을 해줄때는 너무 딱딱한 표(Table) 형식보다는 친근한 대화체와 불렛포인트를 섞어서 가독성 있게 작성해줘.
+
+            [상담의 깊이를 더하는 원칙]
+            1. '왜?'라고 직접 묻기보다 '네 마음이 ~해서 그랬을 것 같아'라고 먼저 헤아려줘.
+            2. 해결책을 줄 때는 '이걸 해봐'가 아니라, '나도 비슷한 상황에서 ~해봤는데 도움이 되더라'는 식으로 친구처럼 제안해.
+            3. 만약 사용자의 말이 모호하면, 전문적인 상담 이론(예: 감정 단어 바퀴)을 바탕으로 사용자가 자신의 감정을 구체적인 단어로 선택할 수 있게 도와줘.
             """
 
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        final_system_prompt = base_system_prompt
+        if knowledge_context:
+            final_system_prompt += f"\n\n[참고할 상담 지식]\n{knowledge_context}\n\n위 지식을 참고해서 Sadie의 말투로 자연스럽게 조언해줘."
+
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": final_system_prompt}]
         for row in db_history:
             row_dict = cast(Dict[str, Any], row)
             messages.append({"role": str(row_dict.get('role')), "content": str(row_dict.get('content'))})
@@ -67,7 +111,7 @@ async def chat_with_ai(request: Request, chat_data: ChatRequest, authorization: 
             model="openai/gpt-oss-20b",
             messages=messages, # type: ignore
             max_tokens=1500,
-            temperature=0.75
+            temperature=0.8
         )
         ai_response = completion.choices[0].message.content
 

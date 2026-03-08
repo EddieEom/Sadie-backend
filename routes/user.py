@@ -1,8 +1,9 @@
 import os
-from typing import Optional, Dict, Any, cast
+from typing import Optional, Dict, Any, cast, List
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header
 from supabase import create_client, Client
 
+from services.analysis_service import SadieAnalyzer
 from core.database import get_db_connection
 from core.security import verify_token
 from psycopg2.extras import RealDictCursor
@@ -100,28 +101,31 @@ async def update_profile(
 async def get_my_profile(authorization: Optional[str] = Header(None)):
     current_user_id = verify_token(authorization)
     conn = get_db_connection()
-    
-    # 2. RealDictCursor를 사용하여 데이터를 딕셔너리 형태로 가져옵니다.
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
     try:
-        # 3. SELECT 절에 'is_social' 필드를 반드시 추가합니다.
+        # [수정] user_id 비교 시 ::text를 추가하여 UUID와 TEXT 타입 간 충돌을 해결합니다.
         cur.execute(
             """
-            SELECT user_id, email, nickname, profile_image, is_social, created_at 
-            FROM users 
-            WHERE user_id = %s
+            SELECT 
+                u.user_id, u.email, u.nickname, u.profile_image, u.is_social, u.created_at,
+                r.content->>'status_score' as mind_score
+            FROM users u
+            LEFT JOIN (
+                SELECT DISTINCT ON (user_id::text) user_id, content, created_at
+                FROM user_reports 
+                WHERE report_type = 'weekly'
+                ORDER BY user_id::text, created_at DESC
+            ) r ON u.user_id::text = r.user_id::text
+            WHERE u.user_id::text = %s
             """,
-            (current_user_id,)
+            (str(current_user_id),) # 안전하게 문자열로 변환하여 전달
         )
-        user = cur.fetchone()
+        user = cast(Dict[str, Any], cur.fetchone())
         
         if not user:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
 
-        # 4. 서버 터미널 디버깅 로그 (이제 필드가 보일 겁니다)
-        print(f"--- [DEBUG] user.py /me 호출됨: {user} ---", flush=True)
-            
         return {
             "status": "success",
             "data": {
@@ -129,8 +133,9 @@ async def get_my_profile(authorization: Optional[str] = Header(None)):
                 "email": user['email'],
                 "nickname": user['nickname'],
                 "profile_image": user['profile_image'],
-                # 5. bool 형변환을 통해 확실하게 true/false 전달
-                "is_social": bool(user.get('is_social')), 
+                "is_social": bool(user.get('is_social')),
+                # [추가] 분석 리포트가 있으면 점수를, 없으면 기본값 100을 반환
+                "mind_score": float(user['mind_score']) if user.get('mind_score') else 36.5,
                 "created_at": user['created_at'].isoformat() if user.get('created_at') else None
             }
         }
@@ -170,3 +175,56 @@ async def update_nickname(
     finally:
         cur.close()
         conn.close()
+
+        
+@router.get("/me/mood-chart") # prefix가 /users이므로 실제 경로는 /users/me/mood-chart
+async def get_combined_mood_data(authorization: Optional[str] = Header(None)):
+    # 1. 안전하게 토큰에서 유저 ID 추출 (current_user_id 직접 받기보다 권장)
+    current_user_id = verify_token(authorization)
+    
+    conn = None
+    cur = None
+    try:
+        analyzer = SadieAnalyzer()
+        conn = analyzer.get_db_connection()
+        # [핵심] RealDictCursor를 써야 딕셔너리 형태(r['date'])로 접근 가능합니다.
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cur.execute("""
+            SELECT 
+                TO_CHAR(created_at, 'MM/DD') as date,
+                (content->>'status_score')::float as score,
+                content->>'weekly_title' as title,
+                content->>'sadie_message' as message
+            FROM user_reports
+            WHERE user_id::text = %s AND report_type = 'weekly'
+            ORDER BY created_at DESC
+            LIMIT 7
+        """, (str(current_user_id),))
+        
+        # Pylance를 위한 타입 캐스팅
+        rows = cast(List[Dict[str, Any]], cur.fetchall())
+        
+        if not rows:
+            return {
+                "chart_data": [{"date": "오늘", "score": 36.5}],
+                "latest_brief": "Sadie와 첫 대화를 나눠보세요!",
+                "current_temp": 36.5
+            }
+            
+        # 최신순(DESC)으로 가져왔으므로, 차트용으로 시간순(reversed) 정렬
+        chart_data = list(reversed([
+            {"date": r['date'], "score": r['score']} for r in rows
+        ]))
+        
+        return {
+            "chart_data": chart_data,
+            "latest_brief": rows[0]['message'],
+            "current_temp": rows[0]['score']
+        }
+    except Exception as e:
+        print(f"Mood Chart Error: {e}")
+        raise HTTPException(status_code=500, detail="차트 데이터를 가져오지 못했습니다.")
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()

@@ -14,3 +14,6 @@ venv/
 # 정적 파일 및 업로드 이미지 (선택 사항)
 static/profiles/*
 !static/profiles/.gitkeep
+
+# 데이터 업로드 스크립트
+upload_data.py

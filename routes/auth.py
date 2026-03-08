@@ -131,39 +131,6 @@ async def verify_and_reset(req: VerifyReset):
         cur.close()
         conn.close()
 
-@router.get("/users/me")
-async def get_me(authorization: Optional[str] = Header(None)):
-    # 토큰 검증 후 user_id 추출
-    current_user_id = verify_token(authorization)
-    
-    conn = get_db_connection()
-    # 컬럼명으로 접근하기 위해 RealDictCursor 사용
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    
-    try:
-        # [중요] is_social 필드를 반드시 조회해야 합니다.
-        cur.execute(
-            "SELECT user_id, nickname, email, is_social FROM users WHERE user_id = %s", 
-            (current_user_id,)
-        )
-        user_res = cur.fetchone()
-        
-        if not user_res:
-            raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
-            
-        print(f"DB에서 가져온 데이터: {user_res}")
-        
-        # 프론트엔드(Flutter)의 형식에 맞춰 반환
-        return {
-            "status": "success",
-            "data": dict(user_res)
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"내 정보 조회 중 오류: {str(e)}")
-    finally:
-        cur.close()
-        conn.close()
-
 @router.delete("/delete-account")
 async def delete_account(
     request: Request, 

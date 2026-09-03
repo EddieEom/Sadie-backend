@@ -844,7 +844,7 @@ https://github.com/EddieEom/Sadie_frontend
 
 # 👨‍💻 Developer
 
-**Eddie Eom**
+**엄인섭**
 
 GitHub
 https://github.com/EddieEom

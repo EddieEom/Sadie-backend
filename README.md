@@ -1,19 +1,25 @@
-# Sadie 백엔드
+<div align="center">
 
-**LLM 학습 실험부터 Flutter 앱·서버 연동까지 진행한 개인 프로젝트**입니다. 모델을 직접 다뤄 보고, 대화 내용을 저장하고 조회하는 앱으로 연결하는 데 관심을 갖고 시작했습니다.
+# Sadie · Backend
 
-## 주요 경험
+**LLM 학습 실험에서 대화 앱·서버 연동까지**
 
-- AI Hub 데이터를 학습용 JSONL 형식으로 변환
-- 학교 GPU 서버에서 LLaMA 3.1 학습 실험 진행
-- FastAPI·PostgreSQL 기반 대화 서버 구성
-- Flutter 앱과 연결해 대화 기능 동작 확인
+</div>
 
-## 모델 학습 실험
+<p align="center"><img alt="Python" src="https://img.shields.io/badge/Python-3776AB?style=flat-square"/> <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?style=flat-square"/> <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square"/> <img alt="Hugging Face" src="https://img.shields.io/badge/Hugging%20Face-FFD21E?style=flat-square"/></p>
 
-LLaMA 3.1을 처음 연결했을 때 한국어 응답이 기대에 미치지 못해, AI Hub 데이터로 추가 학습을 시도했습니다. A100 GPU 2개가 장착된 학교 서버에서 준비한 데이터의 약 5%를 사용했습니다.
 
-소규모 학습 실험에서 뚜렷한 한국어 응답 개선은 확인하지 못했습니다. 데이터 전처리와 학습 실행 과정을 경험했으며, 학습 조건과 전후 응답을 체계적으로 비교하는 평가를 후속 과제로 남겼습니다.
+| 형태 | 실험 환경 | 앱 연동 |
+| :--- | :--- | :--- |
+| **개인 프로젝트** | A100 GPU 2개 장착 학교 서버 | Flutter ↔ FastAPI |
+
+## 🧪 직접 진행한 경험
+
+<table><tr>
+<td width="33%" valign="top"><b>데이터 준비</b><br><br>AI Hub 데이터 활용<br>학습용 JSONL 변환</td>
+<td width="33%" valign="top"><b>모델 학습 실험</b><br><br>LLaMA 3.1 연동<br>준비한 데이터 약 5%로 학습</td>
+<td width="33%" valign="top"><b>앱·서버 연결</b><br><br>대화 API · 기록 저장<br>앱에서 대화 동작 확인</td>
+</tr></table>
 
 ## 앱과 서버 구성
 
@@ -28,9 +34,29 @@ LLaMA 3.1을 처음 연결했을 때 한국어 응답이 기대에 미치지 못
 
 초기 파인튜닝 실험과 현재 외부 LLM API를 사용하는 앱 구성은 별도로 진행한 범위입니다.
 
+
+<details>
+<summary><b>🔬 모델 학습 과정과 결과</b></summary>
+
+## 모델 학습 실험
+
+LLaMA 3.1을 처음 연결했을 때 한국어 응답이 기대에 미치지 못해, AI Hub 데이터로 추가 학습을 시도했습니다. A100 GPU 2개가 장착된 학교 서버에서 준비한 데이터의 약 5%를 사용했습니다.
+
+소규모 학습 실험에서 뚜렷한 한국어 응답 개선은 확인하지 못했습니다. 데이터 전처리와 학습 실행 과정을 경험했으며, 학습 조건과 전후 응답을 체계적으로 비교하는 평가를 후속 과제로 남겼습니다.
+
+</details>
+
+<details>
+<summary><b>📝 동작 확인 · 후속 과제</b></summary>
+
 ## 확인한 내용과 보완 과제
 
 개발 당시 앱과 서버를 연결해 대화 기능의 동작을 확인했습니다. 후속 과제는 학습 데이터·RAG 자료의 출처와 구성을 정리하고, 검색 결과 및 응답 품질을 비교 평가하는 것입니다.
+
+</details>
+
+<details>
+<summary><b>⚙️ 사용 기술 · 환경변수 · 실행</b></summary>
 
 ## 사용 기술
 
@@ -127,6 +153,7 @@ http://127.0.0.1:8000/docs
 
 실행하려면 DB 구조와 외부 서비스 설정을 함께 준비해야 합니다.
 
-## 관련 저장소
+</details>
 
-[Sadie 프론트엔드](https://github.com/EddieEom/Sadie_frontend)
+
+[📱 Flutter 앱 저장소 →](https://github.com/EddieEom/Sadie_frontend)
